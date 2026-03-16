@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-const DB_PATH = path.resolve('db.json');
+const DB_PATH = process.env.DB_PATH || path.resolve('db.json');
 
 export interface User {
   id: string;
