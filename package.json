@@ -1,0 +1,32 @@
+{
+  "name": "apartment-manager-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "dotenv": "^17.3.1",
+    "grammy": "^1.41.1",
+    "node-cron": "^4.2.1",
+    "prisma": "^5.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

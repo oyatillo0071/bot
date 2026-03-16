@@ -1,0 +1,10 @@
+{
+    "version": 3,
+    "file": "bot.d.ts",
+    "sourceRoot": "",
+    "sources": [
+        "bot.ts"
+    ],
+    "names": [],
+    "mappings": "AAAA,OAAO,EAAE,GAAG,EAAkB,OAAO,EAAE,MAAM,QAAQ,CAAC;AAStD,eAAO,MAAM,GAAG,6DAAqB,CAAC"
+}
