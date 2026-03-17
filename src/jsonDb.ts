@@ -27,6 +27,7 @@ export interface Chore {
   groupId: string;
   userId: string;
   photoId: string;
+  taskType: string;
   status: 'pending' | 'confirmed' | 'rejected';
   createdAt: string;
 }
@@ -61,6 +62,12 @@ class JsonDB {
         penaltyDays: g.penaltyDays ?? 0
       }));
       if (!this.data.debts) this.data.debts = [];
+      if (this.data.chores) {
+          this.data.chores = this.data.chores.map(c => ({
+              ...c,
+              taskType: c.taskType || 'umumiy'
+          }));
+      }
     } catch (e) {
       console.log("Yangi db.json fayli yaratilmoqda...");
       await this.save();
@@ -103,12 +110,13 @@ class JsonDB {
     return false;
   }
 
-  async createChore(groupId: string, userId: string, photoId: string) {
+  async createChore(groupId: string, userId: string, photoId: string, taskType: string) {
     const chore: Chore = {
       id: Date.now(),
       groupId,
       userId,
       photoId,
+      taskType,
       status: 'pending',
       createdAt: new Date().toISOString()
     };
@@ -145,6 +153,16 @@ class JsonDB {
       }
       await this.save();
     }
+  }
+
+  async updateMembersOrder(groupId: string, members: GroupMember[]) {
+    const group = this.data.groups.find(g => g.id === groupId);
+    if (group) {
+      group.members = members.map((m, i) => ({ ...m, order: i }));
+      await this.save();
+      return true;
+    }
+    return false;
   }
 
   async addDebt(payerId: string, debtorId: string, amount: number, description: string, groupId: string) {

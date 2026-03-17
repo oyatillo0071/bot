@@ -4,100 +4,22 @@
       "id": "1355861489",
       "firstName": "Rasulov",
       "username": "Jamshidbek_Rasulov"
-    },
-    {
-      "id": "5896103630",
-      "firstName": "Оятиллох",
-      "username": "xvx_w7"
-    },
-    {
-      "id": "625695297",
-      "firstName": "Xojiakbar",
-      "username": "axmedov_xojiakbar"
     }
   ],
   "groups": [
     {
       "id": "-1003723065838",
-      "currentTurn": 1,
+      "currentTurn": 0,
       "reminderHour": 9,
       "members": [
         {
           "userId": "1355861489",
           "order": 0
-        },
-        {
-          "userId": "5896103630",
-          "order": 1
-        },
-        {
-          "userId": "625695297",
-          "order": 2
         }
       ],
       "penaltyDays": 0
     }
   ],
-  "chores": [
-    {
-      "id": 1773682207732,
-      "groupId": "-1003723065838",
-      "userId": "1355861489",
-      "photoId": "AgACAgIAAyEFAATd6XnuAAMUabg-H2g6VFqP-D5bjYDvG_Lkyp4AAikaaxsQ9MFJtitbXxJKdOIBAAMCAAN5AAM6BA",
-      "status": "confirmed",
-      "createdAt": "2026-03-16T17:30:07.732Z"
-    }
-  ],
-  "debts": [
-    {
-      "id": "y5dy2h8d3",
-      "payerId": "1355861489",
-      "debtorId": "5896103630",
-      "amount": 31667,
-      "description": "so'm gilam",
-      "groupId": "-1003723065838",
-      "status": "pending",
-      "createdAt": "2026-03-16T17:51:20.680Z"
-    },
-    {
-      "id": "7il57z1o1",
-      "payerId": "1355861489",
-      "debtorId": "625695297",
-      "amount": 31667,
-      "description": "so'm gilam",
-      "groupId": "-1003723065838",
-      "status": "settled",
-      "createdAt": "2026-03-16T17:51:20.686Z"
-    },
-    {
-      "id": "yt67zcfjq",
-      "payerId": "1355861489",
-      "debtorId": "5896103630",
-      "amount": 5000,
-      "description": "pichoq",
-      "groupId": "-1003723065838",
-      "status": "pending",
-      "createdAt": "2026-03-16T18:06:25.762Z"
-    },
-    {
-      "id": "hfnk8puuu",
-      "payerId": "1355861489",
-      "debtorId": "5896103630",
-      "amount": 33333,
-      "description": "Kommunal to'lov ⚡️🔥💦",
-      "groupId": "-1003723065838",
-      "status": "pending",
-      "createdAt": "2026-03-16T18:10:54.684Z"
-    },
-    {
-      "id": "dc3ptzviz",
-      "payerId": "1355861489",
-      "debtorId": "625695297",
-      "amount": 33333,
-      "description": "Kommunal to'lov ⚡️🔥💦",
-      "groupId": "-1003723065838",
-      "status": "pending",
-      "createdAt": "2026-03-16T18:10:54.686Z"
-    }
-  ]
+  "chores": [],
+  "debts": []
 }

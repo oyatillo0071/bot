@@ -8,17 +8,53 @@ if (!BOT_TOKEN) {
 export const bot = new Bot(BOT_TOKEN);
 const pendingExpenses = new Map();
 const pendingPayments = new Map();
+const TASKS = [
+    { id: 'axlat', label: "🗑 Axlat to'kish", frequency: 1 },
+    { id: 'supurish', label: "🧹 Supurish", frequency: 2 },
+    { id: 'vanna', label: "🧼 Vanna tozalash", frequency: 7 }
+];
+// Helper to get active tasks for a specific date
+function getActiveTasks(date) {
+    // Normalize to Tashkent time (UTC+5)
+    const tashkentOffset = 5 * 60;
+    const localTime = new Date(date.getTime() + (date.getTimezoneOffset() + tashkentOffset) * 60000);
+    const daysSinceEpoch = Math.floor(localTime.getTime() / (1000 * 60 * 60 * 24));
+    const dayOfWeek = localTime.getDay(); // 0 is Sunday
+    const active = [];
+    // Axlat: Daily
+    active.push(TASKS[0]);
+    // Supurish: Every 2 days
+    if (daysSinceEpoch % 2 === 0) {
+        active.push(TASKS[1]);
+    }
+    // Vanna: Weekly (Sunday)
+    if (dayOfWeek === 0) {
+        active.push(TASKS[2]);
+    }
+    return active;
+}
+// Helper to get task assignments for a group
+function getTaskAssignments(groupId, date = new Date()) {
+    const group = db.getGroups().find(g => g.id === groupId);
+    if (!group || group.members.length === 0)
+        return [];
+    const activeTasks = getActiveTasks(date);
+    const N = group.members.length;
+    return activeTasks.map((task) => {
+        // Find original index in TASKS to keep rotation consistent
+        const taskOriginalIndex = TASKS.findIndex(t => t.id === task.id);
+        const index = (group.currentTurn + taskOriginalIndex) % N;
+        const member = group.members[index];
+        const user = db.getUsers().find(u => u.id === member.userId);
+        return { task, user, userId: member.userId };
+    });
+}
 // Helper function to get current user's turn
 async function getCurrentTurnUser(groupId) {
-    const group = db.getGroups().find((g) => g.id === groupId);
-    if (!group || group.members.length === 0)
-        return null;
-    const turnIndex = group.currentTurn % group.members.length;
-    const member = group.members[turnIndex];
-    if (!member)
-        return null;
-    const user = db.getUsers().find((u) => u.id === member.userId);
-    return user ? { ...member, user } : null;
+    // This function is now less relevant but kept for backward compatibility if needed
+    // or can be repurposed to return the first task person.
+    const assignments = getTaskAssignments(groupId);
+    return assignments.length > 0 ? assignments[0] : null;
 }
 // /kommunal command
 bot.command("kommunal", async (ctx) => {
@@ -50,6 +86,7 @@ bot.command("start", async (ctx) => {
         "🧹 **NAVBATCHILIK:**\n" +
         "/join - Ro'yxatga qo'shilish\n" +
         "/list - Navbatchilar va jarimalar\n" +
+        "/navbat - Tartibni o'zgartirish (reorder)\n" +
         "/done - Ishni tugatib rasm bilan yuboring\n" +
         "/stats - Umumiy holat va statistika\n\n" +
         "💰 **XARAJATLAR:**\n" +
@@ -61,6 +98,25 @@ bot.command("start", async (ctx) => {
         "Bot bilan shaxsiy yozishmada `/anon Xabar` deb yozing.\n" +
         "Xabar guruhga ismingiz ko'rsatilmagan holda yuboriladi.\n\n" +
         "Yordam kerak bo'lsa, guruhda yozing!");
+});
+// /navbat command (reorder)
+bot.command("navbat", async (ctx) => {
+    const groupId = ctx.chat.id.toString();
+    const group = db.getGroups().find(g => g.id === groupId);
+    if (!group || group.members.length === 0)
+        return await ctx.reply("Guruh topilmadi yoki a'zolar yo'q.");
+    const keyboard = new InlineKeyboard();
+    group.members.forEach((m, i) => {
+        const user = db.getUsers().find(u => u.id === m.userId);
+        keyboard.text(`${i + 1}. ${user?.firstName || "Noma'lum"}`, "ignore").row();
+        if (i > 0)
+            keyboard.text("⬆️ Yuqoriga", `move_up_${m.userId}`);
+        if (i < group.members.length - 1)
+            keyboard.text("⬇️ Pastga", `move_down_${m.userId}`);
+        keyboard.row();
+    });
+    keyboard.text("✅ Tayyor", "navbat_done");
+    await ctx.reply("Navbatchilik tartibini o'zgartirish:", { reply_markup: keyboard });
 });
 // /join command
 bot.command("join", async (ctx) => {
@@ -79,18 +135,16 @@ bot.command("join", async (ctx) => {
 // /list command
 bot.command("list", async (ctx) => {
     const groupId = ctx.chat.id.toString();
-    const group = db.getGroups().find((g) => g.id === groupId);
-    if (!group || group.members.length === 0)
+    const assignments = getTaskAssignments(groupId);
+    if (assignments.length === 0)
         return await ctx.reply("Ro'yxat bo'sh. /join qiling.");
-    const turnIndex = group.currentTurn % group.members.length;
-    let text = "📋 **Navbatchilik holati:**\n\n";
-    group.members.forEach((member, index) => {
-        const user = db.getUsers().find((u) => u.id === member.userId);
-        const isCurrent = index === turnIndex;
-        text += `${index + 1}. ${user?.firstName}${isCurrent ? " (Joriy 🧹🗑🧴)" : ""}\n`;
+    let text = "📋 **Bugungi vazifalar:**\n\n";
+    assignments.forEach(a => {
+        text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**\n`;
     });
-    if (group.penaltyDays > 0)
-        text += `\n⚠️ Navbatchida **${group.penaltyDays} kun** jarima bor.`;
+    const group = db.getGroups().find(g => g.id === groupId);
+    if (group && group.penaltyDays > 0)
+        text += `\n⚠️ Navbatchilarda **${group.penaltyDays} kun** jarima bor.`;
     await ctx.reply(text, { parse_mode: "Markdown" });
 });
 // /xarajat command
@@ -199,6 +253,45 @@ bot.on("message:text", async (ctx, next) => {
 bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
     const userId = ctx.from.id.toString();
+    if (data === "ignore")
+        return await ctx.answerCallbackQuery();
+    if (data === "navbat_done") {
+        await ctx.editMessageText("✅ Navbatchilik tartibi saqlandi.");
+        return await ctx.answerCallbackQuery();
+    }
+    if (data.startsWith("move_up_") || data.startsWith("move_down_")) {
+        const targetUserId = data.replace("move_up_", "").replace("move_down_", "");
+        const groupId = ctx.chat?.id.toString();
+        if (!groupId)
+            return;
+        const group = db.getGroups().find(g => g.id === groupId);
+        if (!group)
+            return;
+        const idx = group.members.findIndex(m => m.userId === targetUserId);
+        if (idx === -1)
+            return;
+        const newMembers = [...group.members];
+        if (data.startsWith("move_up_") && idx > 0) {
+            [newMembers[idx - 1], newMembers[idx]] = [newMembers[idx], newMembers[idx - 1]];
+        }
+        else if (data.startsWith("move_down_") && idx < newMembers.length - 1) {
+            [newMembers[idx], newMembers[idx + 1]] = [newMembers[idx + 1], newMembers[idx]];
+        }
+        await db.updateMembersOrder(groupId, newMembers);
+        const keyboard = new InlineKeyboard();
+        newMembers.forEach((m, i) => {
+            const user = db.getUsers().find(u => u.id === m.userId);
+            keyboard.text(`${i + 1}. ${user?.firstName || "Noma'lum"}`, "ignore").row();
+            if (i > 0)
+                keyboard.text("⬆️ Yuqoriga", `move_up_${m.userId}`);
+            if (i < newMembers.length - 1)
+                keyboard.text("⬇️ Pastga", `move_down_${m.userId}`);
+            keyboard.row();
+        });
+        keyboard.text("✅ Tayyor", "navbat_done");
+        await ctx.editMessageReplyMarkup({ reply_markup: keyboard });
+        return await ctx.answerCallbackQuery();
+    }
     if (data === "split_manual_init") {
         const session = pendingExpenses.get(userId);
         if (!session)
@@ -310,6 +403,20 @@ bot.on("callback_query:data", async (ctx) => {
             }
         }
     }
+    else if (data.startsWith("task_done_")) {
+        const parts = data.split("_");
+        const taskId = parts[2];
+        const photoId = parts.slice(3).join("_");
+        const groupId = ctx.chat?.id.toString();
+        if (!groupId)
+            return;
+        const task = TASKS.find(t => t.id === taskId);
+        const chore = await db.createChore(groupId, userId, photoId, taskId);
+        const kb = new InlineKeyboard()
+            .text("Tasdiqlash ✅", `confirm_${chore.id}`)
+            .text("Rad etish ❌", `reject_${chore.id}`);
+        await ctx.editMessageText(`👤 **${ctx.from.first_name}** vazifani bajardi: **${task?.label}**\n\nGuruh a'zolari tasdiqlashi kutilmoqda.`, { reply_markup: kb });
+    }
     else if (data.startsWith("confirm_") || data.startsWith("reject_")) {
         const choreId = parseInt(data.split("_")[1] || "0");
         const chore = db.getChores().find(c => c.id === choreId);
@@ -317,12 +424,25 @@ bot.on("callback_query:data", async (ctx) => {
             const action = data.startsWith("confirm_") ? "confirmed" : "rejected";
             await db.updateChoreStatus(choreId, action);
             if (action === "confirmed") {
-                await db.decrementPenaltyOrMoveTurn(chore.groupId);
-                const next = await getCurrentTurnUser(chore.groupId);
-                await ctx.editMessageText(`✅ Tasdiqlandi. Navbat: ${next?.user.firstName || "aylanmoqda"}`);
+                const today = new Date().toISOString().split('T')[0];
+                const confirmedToday = db.getChores().filter(c => c.groupId === chore.groupId &&
+                    c.status === 'confirmed' &&
+                    c.createdAt.startsWith(today));
+                // If all 3 tasks are confirmed, we can move the turn
+                // Note: For simplicity, we just notify. Turn moving logic is better in midnight cron
+                // But we can decrement penalty if it exists.
+                if (confirmedToday.length >= 3) {
+                    await db.decrementPenaltyOrMoveTurn(chore.groupId);
+                    await ctx.editMessageText(`✅ Tasdiqlandi. Bugungi barcha vazifalar bajarildi! ✨`);
+                }
+                else {
+                    const task = TASKS.find(t => t.id === chore.taskType);
+                    await ctx.editMessageText(`✅ Tasdiqlandi. **${task?.label}** bajarildi.`);
+                }
             }
-            else
+            else {
                 await ctx.editMessageText("❌ Rad etildi.");
+            }
         }
     }
     await ctx.answerCallbackQuery();
@@ -393,16 +513,19 @@ async function getGeneralStatus(groupId) {
     if (!group)
         return null;
     let text = "🏢 **KVARTIRA UMUMIY HOLATI** 📊\n\n";
-    // 1. Current Navbatchi
-    const current = await getCurrentTurnUser(groupId);
-    if (current) {
-        text += `🧹 **Bugungi navbatchi:** [${current.user.firstName}](tg://user?id=${current.userId})\n`;
+    // 1. Current Assignments
+    const assignments = getTaskAssignments(groupId);
+    if (assignments.length > 0) {
+        text += "📋 **Bugungi vazifalar:**\n";
+        assignments.forEach(a => {
+            text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**\n`;
+        });
         if (group.penaltyDays > 0) {
-            text += `⚠️ *Jarima bor:* ${group.penaltyDays} kun\n`;
+            text += `⚠️ *Guruhda jarima:* ${group.penaltyDays} kun\n`;
         }
     }
     else {
-        text += `🧹 **Navbatchi:** Ro'yxat bo'sh.\n`;
+        text += `📋 **Vazifalar:** Ro'yxat bo'sh.\n`;
     }
     text += "────────────────────\n";
     // 2. Debts Summary
@@ -492,13 +615,19 @@ bot.on("message:photo", async (ctx) => {
     const caption = ctx.message.caption || "";
     if (!caption.includes("/done"))
         return;
+    const userId = ctx.from.id.toString();
     const groupId = ctx.chat.id.toString();
-    const current = await getCurrentTurnUser(groupId);
-    if (current?.userId === ctx.from.id.toString()) {
-        const chore = await db.createChore(groupId, current.userId, ctx.message.photo[ctx.message.photo.length - 1].file_id);
-        const kb = new InlineKeyboard().text("Tasdiqlash ✅", `confirm_${chore.id}`).text("Rad etish ❌", `reject_${chore.id}`);
-        await ctx.reply(`${ctx.from.first_name} vazifalarni bajardi! 🧹🗑🧴`, { reply_markup: kb });
+    const assignments = getTaskAssignments(groupId);
+    const userTask = assignments.find(a => a.userId === userId);
+    if (!userTask) {
+        return await ctx.reply("Bugun sizga vazifa berilmagan. 🤷‍♂️");
     }
+    const kb = new InlineKeyboard();
+    const activeTasks = getActiveTasks(new Date());
+    activeTasks.forEach(t => {
+        kb.text(t.label, `task_done_${t.id}_${ctx.message.photo[ctx.message.photo.length - 1].file_id}`).row();
+    });
+    await ctx.reply("Qaysi vazifani bajardingiz? Tanlang:", { reply_markup: kb });
 });
 // Cron Jobs
 // 1. Daily morning summary (8:00 AM)
@@ -516,7 +645,7 @@ cron.schedule("0 8 * * *", async () => {
         }
     }
 }, { timezone: "Asia/Tashkent" });
-// 2. Midnight penalty check
+// 2. Midnight penalty and turn movement check
 cron.schedule("0 0 * * *", async () => {
     const groups = db.getGroups();
     for (const group of groups) {
@@ -525,14 +654,23 @@ cron.schedule("0 0 * * *", async () => {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayStr = yesterday.toISOString().split('T')[0];
-        if (db.getChores().filter(c => c.groupId === group.id && c.status === 'confirmed' && c.createdAt.startsWith(yesterdayStr)).length === 0) {
+        // Check how many UNIQUE tasks were confirmed yesterday
+        const confirmedYesterday = db.getChores().filter(c => c.groupId === group.id &&
+            c.status === 'confirmed' &&
+            c.createdAt.startsWith(yesterdayStr));
+        const uniqueTasksDone = new Set(confirmedYesterday.map(c => c.taskType)).size;
+        // Get number of tasks that WERE active yesterday
+        const activeYesterday = getActiveTasks(yesterday);
+        if (uniqueTasksDone < activeYesterday.length) {
+            // Penalty for incomplete tasks
             await db.addPenalty(group.id);
-            const cur = await getCurrentTurnUser(group.id);
-            if (cur)
-                try {
-                    await bot.api.sendMessage(Number(group.id), `⚠️ **JARIMA!**\n${cur.user.firstName} kecha ish qilmadi: +1 kun jarima.`);
-                }
-                catch { }
+            try {
+                await bot.api.sendMessage(Number(group.id), `⚠️ **JARIMA!**\nKecha barcha vazifalar (${activeYesterday.length} ta) to'liq bajarilmadi. Guruhga +1 kun jarima qo'shildi.`);
+            }
+            catch { }
+        }
+        else {
+            await db.decrementPenaltyOrMoveTurn(group.id);
         }
     }
 }, { timezone: "Asia/Tashkent" });
@@ -540,12 +678,18 @@ const times = ["0 9 * * *", "0 12 * * *", "0 20 * * *", "40 22 * * *"];
 times.forEach(t => cron.schedule(t, async () => {
     const groups = db.getGroups();
     for (const group of groups) {
-        const cur = await getCurrentTurnUser(group.id);
-        if (cur)
+        const assignments = getTaskAssignments(group.id);
+        if (assignments.length > 0) {
+            let text = "🔔 **BUGUNGI VAZIFALAR:**\n\n";
+            assignments.forEach(a => {
+                text += `${a.task.label}: [${a.user?.firstName || "Noma'lum"}](tg://user?id=${a.userId})\n`;
+            });
+            text += "\nIshni tugatib rasm + /done yuboring.";
             try {
-                await bot.api.sendMessage(Number(group.id), `🔔 **NAVBTCHI:** [${cur.user.firstName}](tg://user?id=${cur.userId}) 🧹🗑🧴\nIshni tugatib rasm + /done yuboring.`, { parse_mode: "Markdown" });
+                await bot.api.sendMessage(Number(group.id), text, { parse_mode: "Markdown" });
             }
             catch { }
+        }
     }
 }, { timezone: "Asia/Tashkent" }));
 // Monthly rent reminder: 2nd of every month at 10:00

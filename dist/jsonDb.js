@@ -13,6 +13,12 @@ class JsonDB {
             }));
             if (!this.data.debts)
                 this.data.debts = [];
+            if (this.data.chores) {
+                this.data.chores = this.data.chores.map(c => ({
+                    ...c,
+                    taskType: c.taskType || 'umumiy'
+                }));
+            }
         }
         catch (e) {
             console.log("Yangi db.json fayli yaratilmoqda...");
@@ -51,12 +57,13 @@ class JsonDB {
         }
         return false;
     }
-    async createChore(groupId, userId, photoId) {
+    async createChore(groupId, userId, photoId, taskType) {
         const chore = {
             id: Date.now(),
             groupId,
             userId,
             photoId,
+            taskType,
             status: 'pending',
             createdAt: new Date().toISOString()
         };
@@ -91,6 +98,15 @@ class JsonDB {
             }
             await this.save();
         }
+    }
+    async updateMembersOrder(groupId, members) {
+        const group = this.data.groups.find(g => g.id === groupId);
+        if (group) {
+            group.members = members.map((m, i) => ({ ...m, order: i }));
+            await this.save();
+            return true;
+        }
+        return false;
     }
     async addDebt(payerId, debtorId, amount, description, groupId) {
         const debt = {
