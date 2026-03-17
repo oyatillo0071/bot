@@ -642,6 +642,17 @@ async function getGeneralStatus(groupId: string) {
   return text;
 }
 
+// /statistika command
+bot.command(["statistika", "stats"], async (ctx) => {
+  const groupId = ctx.chat.id.toString();
+  const statusText = await getGeneralStatus(groupId);
+  if (statusText) {
+    await ctx.reply(statusText, { parse_mode: "Markdown" });
+  } else {
+    await ctx.reply("Guruh topilmadi. Avval /join buyrug'ini bosing.");
+  }
+});
+
 // /anon command
 bot.command("anon", async (ctx) => {
   if (ctx.chat.type !== "private") {

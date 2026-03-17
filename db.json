@@ -1,25 +1,6 @@
 {
-  "users": [
-    {
-      "id": "1355861489",
-      "firstName": "Rasulov",
-      "username": "Jamshidbek_Rasulov"
-    }
-  ],
-  "groups": [
-    {
-      "id": "-1003723065838",
-      "currentTurn": 0,
-      "reminderHour": 9,
-      "members": [
-        {
-          "userId": "1355861489",
-          "order": 0
-        }
-      ],
-      "penaltyDays": 0
-    }
-  ],
+  "users": [],
+  "groups": [],
   "chores": [],
   "debts": []
 }
