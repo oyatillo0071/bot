@@ -9,7 +9,11 @@ class JsonDB {
             this.data = JSON.parse(content);
             this.data.groups = this.data.groups.map(g => ({
                 ...g,
-                penaltyDays: g.penaltyDays ?? 0
+                penaltyDays: g.penaltyDays ?? 0,
+                members: g.members.map(m => ({
+                    ...m,
+                    penaltyDays: m.penaltyDays ?? 0
+                }))
             }));
             if (!this.data.debts)
                 this.data.debts = [];
@@ -51,7 +55,7 @@ class JsonDB {
     async addMember(groupId, userId) {
         const group = this.data.groups.find(g => g.id === groupId);
         if (group && !group.members.find(m => m.userId === userId)) {
-            group.members.push({ userId, order: group.members.length });
+            group.members.push({ userId, order: group.members.length, penaltyDays: 0 });
             await this.save();
             return true;
         }
@@ -87,17 +91,40 @@ class JsonDB {
             await this.save();
         }
     }
+    async addMemberPenalty(groupId, userId) {
+        const group = this.data.groups.find(g => g.id === groupId);
+        if (group) {
+            const member = group.members.find(m => m.userId === userId);
+            if (member) {
+                member.penaltyDays = (member.penaltyDays || 0) + 1;
+                await this.save();
+            }
+        }
+    }
     async decrementPenaltyOrMoveTurn(groupId) {
         const group = this.data.groups.find(g => g.id === groupId);
         if (group) {
-            if (group.penaltyDays > 0) {
-                group.penaltyDays -= 1;
+            // Check current person for penalties
+            const assignments = this.getGroupActiveAssignments(group);
+            const currentPersonId = assignments.length > 0 ? assignments[0].userId : null;
+            const member = group.members.find(m => m.userId === currentPersonId);
+            if (member && member.penaltyDays > 0) {
+                member.penaltyDays -= 1;
             }
             else {
                 group.currentTurn += 1;
             }
             await this.save();
         }
+    }
+    // Private helper for turn logic consistency
+    getGroupActiveAssignments(group) {
+        // Note: We need getActiveTasks here too but it's in bot.ts
+        // For simplicity let's just use the first member by current turn
+        if (group.members.length === 0)
+            return [];
+        const index = group.currentTurn % group.members.length;
+        return [group.members[index]];
     }
     async updateMembersOrder(groupId, members) {
         const group = this.data.groups.find(g => g.id === groupId);

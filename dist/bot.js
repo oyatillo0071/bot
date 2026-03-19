@@ -140,11 +140,11 @@ bot.command("list", async (ctx) => {
         return await ctx.reply("Ro'yxat bo'sh. /join qiling.");
     let text = "📋 **Bugungi vazifalar:**\n\n";
     assignments.forEach(a => {
-        text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**\n`;
+        const group = db.getGroups().find(g => g.id === groupId);
+        const member = group?.members.find(m => m.userId === a.userId);
+        const penalty = member?.penaltyDays || 0;
+        text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**${penalty > 0 ? ` (⚠️ ${penalty} kun jarima)` : ""}\n`;
     });
-    const group = db.getGroups().find(g => g.id === groupId);
-    if (group && group.penaltyDays > 0)
-        text += `\n⚠️ Navbatchilarda **${group.penaltyDays} kun** jarima bor.`;
     await ctx.reply(text, { parse_mode: "Markdown" });
 });
 // /xarajat command
@@ -424,21 +424,8 @@ bot.on("callback_query:data", async (ctx) => {
             const action = data.startsWith("confirm_") ? "confirmed" : "rejected";
             await db.updateChoreStatus(choreId, action);
             if (action === "confirmed") {
-                const today = new Date().toISOString().split('T')[0];
-                const confirmedToday = db.getChores().filter(c => c.groupId === chore.groupId &&
-                    c.status === 'confirmed' &&
-                    c.createdAt.startsWith(today));
-                // If all 3 tasks are confirmed, we can move the turn
-                // Note: For simplicity, we just notify. Turn moving logic is better in midnight cron
-                // But we can decrement penalty if it exists.
-                if (confirmedToday.length >= 3) {
-                    await db.decrementPenaltyOrMoveTurn(chore.groupId);
-                    await ctx.editMessageText(`✅ Tasdiqlandi. Bugungi barcha vazifalar bajarildi! ✨`);
-                }
-                else {
-                    const task = TASKS.find(t => t.id === chore.taskType);
-                    await ctx.editMessageText(`✅ Tasdiqlandi. **${task?.label}** bajarildi.`);
-                }
+                const task = TASKS.find(t => t.id === chore.taskType);
+                await ctx.editMessageText(`✅ Tasdiqlandi. **${task?.label}** bajarildi.`);
             }
             else {
                 await ctx.editMessageText("❌ Rad etildi.");
@@ -518,11 +505,10 @@ async function getGeneralStatus(groupId) {
     if (assignments.length > 0) {
         text += "📋 **Bugungi vazifalar:**\n";
         assignments.forEach(a => {
-            text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**\n`;
+            const member = group.members.find(m => m.userId === a.userId);
+            const penalty = member?.penaltyDays || 0;
+            text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**${penalty > 0 ? ` (⚠️ ${penalty} kun jarima)` : ""}\n`;
         });
-        if (group.penaltyDays > 0) {
-            text += `⚠️ *Guruhda jarima:* ${group.penaltyDays} kun\n`;
-        }
     }
     else {
         text += `📋 **Vazifalar:** Ro'yxat bo'sh.\n`;
@@ -592,33 +578,13 @@ bot.command("anon", async (ctx) => {
     if (userGroups.length === 0) {
         return await ctx.reply("Siz hech qanday guruhga a'zo emassiz.");
     }
-    if (userGroups.length === 1) {
-        const groupId = userGroups[0].id;
-        try {
-            await bot.api.sendMessage(Number(groupId), `🤫 **ANONIM XABAR:**\n\n${message}`);
-            await ctx.reply("Xabaringiz guruhga anonim tarzda yuborildi. ✅");
-        }
-        catch (err) {
-            await ctx.reply("Xabarni yuborishda xatolik yuz berdi.");
-        }
+    const groupId = userGroups[0].id;
+    try {
+        await bot.api.sendMessage(Number(groupId), `🤫 **ANONIM XABAR:**\n\n${message}`);
+        await ctx.reply("Xabaringiz guruhga anonim tarzda yuborildi. ✅");
     }
-    else {
-        // If user is in multiple groups, ask which one
-        const keyboard = new InlineKeyboard();
-        userGroups.forEach(g => {
-            keyboard.text(`Guruh: ${g.id}`, `send_anon_${g.id}_${message.substring(0, 20)}`).row();
-        });
-        // This part is a bit complex due to message length in callback data. 
-        // Let's simplify for now: just use the first group if they are in any.
-        // Or just inform them.
-        const groupId = userGroups[0].id;
-        try {
-            await bot.api.sendMessage(Number(groupId), `🤫 **ANONIM XABAR:**\n\n${message}`);
-            await ctx.reply("Xabaringiz guruhga anonim tarzda yuborildi. ✅");
-        }
-        catch (err) {
-            await ctx.reply("Xabarni yuborishda xatolik yuz berdi.");
-        }
+    catch (err) {
+        await ctx.reply("Xabarni yuborishda xatolik yuz berdi.");
     }
 });
 // Photos for /done
@@ -634,9 +600,11 @@ bot.on("message:photo", async (ctx) => {
         return await ctx.reply("Bugun sizga vazifa berilmagan. 🤷‍♂️");
     }
     const kb = new InlineKeyboard();
-    const activeTasks = getActiveTasks(new Date());
-    activeTasks.forEach(t => {
-        kb.text(t.label, `task_done_${t.id}_${ctx.message.photo[ctx.message.photo.length - 1].file_id}`).row();
+    const activeTasksForToday = getActiveTasks(new Date());
+    // Show only tasks assigned to THIS user today
+    const myAssignments = assignments.filter(a => a.userId === userId);
+    myAssignments.forEach(a => {
+        kb.text(a.task.label, `task_done_${a.task.id}_${ctx.message.photo[ctx.message.photo.length - 1].file_id}`).row();
     });
     await ctx.reply("Qaysi vazifani bajardingiz? Tanlang:", { reply_markup: kb });
 });
@@ -665,24 +633,28 @@ cron.schedule("0 0 * * *", async () => {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayStr = yesterday.toISOString().split('T')[0];
-        // Check how many UNIQUE tasks were confirmed yesterday
-        const confirmedYesterday = db.getChores().filter(c => c.groupId === group.id &&
-            c.status === 'confirmed' &&
-            c.createdAt.startsWith(yesterdayStr));
-        const uniqueTasksDone = new Set(confirmedYesterday.map(c => c.taskType)).size;
-        // Get number of tasks that WERE active yesterday
+        // Check which tasks were active yesterday
         const activeYesterday = getActiveTasks(yesterday);
-        if (uniqueTasksDone < activeYesterday.length) {
-            // Penalty for incomplete tasks
-            await db.addPenalty(group.id);
-            try {
-                await bot.api.sendMessage(Number(group.id), `⚠️ **JARIMA!**\nKecha barcha vazifalar (${activeYesterday.length} ta) to'liq bajarilmadi. Guruhga +1 kun jarima qo'shildi.`);
+        const assignmentsYesterday = getTaskAssignments(group.id, yesterday);
+        for (const assignment of assignmentsYesterday) {
+            const done = db.getChores().some(c => c.groupId === group.id &&
+                c.userId === assignment.userId &&
+                c.taskType === assignment.task.id &&
+                c.status === 'confirmed' &&
+                c.createdAt.startsWith(yesterdayStr));
+            if (!done) {
+                // Individual penalty
+                await db.addMemberPenalty(group.id, assignment.userId);
+                const user = db.getUsers().find(u => u.id === assignment.userId);
+                try {
+                    await bot.api.sendMessage(Number(group.id), `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. +1 kun jarima.`);
+                }
+                catch { }
             }
-            catch { }
         }
-        else {
-            await db.decrementPenaltyOrMoveTurn(group.id);
-        }
+        // Always move turn at midnight (unless there's a penalty system that holds the turn)
+        // Actually, decrementPenaltyOrMoveTurn handles the "hold" logic per member
+        await db.decrementPenaltyOrMoveTurn(group.id);
     }
 }, { timezone: "Asia/Tashkent" });
 const times = ["0 9 * * *", "0 12 * * *", "0 20 * * *", "40 22 * * *"];
