@@ -12,7 +12,8 @@ export interface User {
 export interface GroupMember {
   userId: string;
   order: number;
-  penaltyDays: number;
+  penaltyDays: number; // Keep for legacy or general
+  taskDebts: Record<string, number>; // { 'axlat': 2, 'supurish': 0 ... }
 }
 
 export interface Group {
@@ -20,7 +21,7 @@ export interface Group {
   currentTurn: number;
   reminderHour: number;
   members: GroupMember[];
-  penaltyDays: number; // This can remain as a group-level flag or be removed, but let's focus on members
+  penaltyDays: number;
 }
 
 export interface Chore {
@@ -44,6 +45,12 @@ export interface Debt {
   createdAt: string;
 }
 
+const TASKS_CONFIG = [
+    { id: 'axlat', label: "🗑 Axlat to'kish", frequency: 1 },
+    { id: 'supurish', label: "🧹 Supurish", frequency: 2 },
+    { id: 'vanna', label: "🧼 Vanna tozalash", frequency: 7 }
+];
+
 export interface Data {
   users: User[];
   groups: Group[];
@@ -53,6 +60,7 @@ export interface Data {
 
 class JsonDB {
   private data: Data = { users: [], groups: [], chores: [], debts: [] };
+  private saveQueue: Promise<void> = Promise.resolve();
 
   async init() {
     try {
@@ -63,7 +71,8 @@ class JsonDB {
         penaltyDays: g.penaltyDays ?? 0,
         members: g.members.map(m => ({
             ...m,
-            penaltyDays: m.penaltyDays ?? 0
+            penaltyDays: m.penaltyDays ?? 0,
+            taskDebts: m.taskDebts ?? { 'axlat': 0, 'supurish': 0, 'vanna': 0 }
         }))
       }));
       if (!this.data.debts) this.data.debts = [];
@@ -80,13 +89,68 @@ class JsonDB {
   }
 
   async save() {
-    await fs.writeFile(DB_PATH, JSON.stringify(this.data, null, 2));
+    this.saveQueue = this.saveQueue.then(async () => {
+        try {
+            await fs.writeFile(DB_PATH, JSON.stringify(this.data, null, 2));
+        } catch (err) {
+            console.error("Faylga saqlashda xatolik:", err);
+        }
+    });
+    return this.saveQueue;
   }
 
   getUsers() { return this.data.users; }
   getGroups() { return this.data.groups; }
   getChores() { return this.data.chores; }
   getDebts() { return this.data.debts; }
+
+  getActiveTasks(date: Date) {
+    const tashkentOffset = 5 * 60;
+    const localTime = new Date(date.getTime() + (date.getTimezoneOffset() + tashkentOffset) * 60000);
+    const daysSinceEpoch = Math.floor(localTime.getTime() / (1000 * 60 * 60 * 24));
+    const dayOfWeek = localTime.getDay(); // 0 is Sunday
+
+    const active = [];
+    active.push(TASKS_CONFIG[0]);
+    if (daysSinceEpoch % 2 === 0) active.push(TASKS_CONFIG[1]);
+    if (dayOfWeek === 0) active.push(TASKS_CONFIG[2]);
+    return active;
+  }
+
+  getTaskAssignments(groupId: string, date: Date = new Date()) {
+    const group = this.data.groups.find(g => g.id === groupId);
+    if (!group || group.members.length === 0) return [];
+    
+    const activeTasks = this.getActiveTasks(date);
+    const N = group.members.length;
+    
+    // 1. Normal rotation for today
+    const assignments = activeTasks.map((task) => {
+        const taskOriginalIndex = TASKS_CONFIG.findIndex(t => t.id === task.id);
+        const index = (group.currentTurn + taskOriginalIndex) % N;
+        const member = group.members[index];
+        const user = this.data.users.find(u => u.id === member.userId);
+        return { task, user, userId: member.userId, isDebt: false };
+    });
+
+    // 2. Add anyone who has outstanding debts for ANY task (not just active today)
+    group.members.forEach(m => {
+        for (const taskId in m.taskDebts) {
+            if (m.taskDebts[taskId] > 0) {
+                // If this member is already assigned this task today, skip adding as extra
+                if (assignments.some(a => a.userId === m.userId && a.task.id === taskId)) continue;
+                
+                const task = TASKS_CONFIG.find(t => t.id === taskId);
+                if (task) {
+                    const user = this.data.users.find(u => u.id === m.userId);
+                    assignments.push({ task, user, userId: m.userId, isDebt: true });
+                }
+            }
+        }
+    });
+
+    return assignments;
+  }
 
   async upsertUser(user: User) {
     const index = this.data.users.findIndex(u => u.id === user.id);
@@ -108,9 +172,29 @@ class JsonDB {
   async addMember(groupId: string, userId: string) {
     const group = this.data.groups.find(g => g.id === groupId);
     if (group && !group.members.find(m => m.userId === userId)) {
-      group.members.push({ userId, order: group.members.length, penaltyDays: 0 });
+      group.members.push({ 
+          userId, 
+          order: group.members.length, 
+          penaltyDays: 0,
+          taskDebts: { 'axlat': 0, 'supurish': 0, 'vanna': 0 }
+      });
       await this.save();
       return true;
+    }
+    return false;
+  }
+
+  async removeMember(groupId: string, userId: string) {
+    const group = this.data.groups.find(g => g.id === groupId);
+    if (group) {
+      const index = group.members.findIndex(m => m.userId === userId);
+      if (index > -1) {
+        group.members.splice(index, 1);
+        // Reorder remaining members
+        group.members = group.members.map((m, i) => ({ ...m, order: i }));
+        await this.save();
+        return true;
+      }
     }
     return false;
   }
@@ -159,32 +243,48 @@ class JsonDB {
     }
   }
 
+  async addMemberTaskPenalty(groupId: string, userId: string, taskId: string) {
+    const group = this.data.groups.find(g => g.id === groupId);
+    if (group) {
+      const member = group.members.find(m => m.userId === userId);
+      if (member) {
+          if (!member.taskDebts) member.taskDebts = { 'axlat': 0, 'supurish': 0, 'vanna': 0 };
+          member.taskDebts[taskId] = (member.taskDebts[taskId] || 0) + 1;
+          await this.save();
+      }
+    }
+  }
+
+  async clearMemberTaskDebt(groupId: string, userId: string, taskId: string) {
+    const group = this.data.groups.find(g => g.id === groupId);
+    if (group) {
+      const member = group.members.find(m => m.userId === userId);
+      if (member && member.taskDebts && member.taskDebts[taskId] > 0) {
+          member.taskDebts[taskId] -= 1;
+          await this.save();
+          return true; // Used a debt
+      }
+    }
+    return false; // Was a normal daily task
+  }
+
   async decrementPenaltyOrMoveTurn(groupId: string) {
     const group = this.data.groups.find(g => g.id === groupId);
     if (group) {
-      // Check current person for penalties
-      const assignments = this.getGroupActiveAssignments(group);
-      const currentPersonId = assignments.length > 0 ? assignments[0].userId : null;
-      const member = group.members.find(m => m.userId === currentPersonId);
+      // Find the member who is at the current rotation (usually for daily 'axlat' task)
+      const index = group.currentTurn % group.members.length;
+      const member = group.members[index];
 
-      if (member && member.penaltyDays > 0) {
-        member.penaltyDays -= 1;
-      } else {
-        group.currentTurn += 1;
-      }
+      // Note: We only move turn if the member responsible for the rotation task is 'clean'
+      // This is optional but ensures rotation logic stays paused if needed.
+      // However, the user wants the debt to accumulate.
+      // Let's just always move turn at midnight, and debts stay with people.
+      group.currentTurn += 1;
       await this.save();
     }
   }
 
-  // Private helper for turn logic consistency
-  private getGroupActiveAssignments(group: Group) {
-      // Note: We need getActiveTasks here too but it's in bot.ts
-      // For simplicity let's just use the first member by current turn
-      if (group.members.length === 0) return [];
-      const index = group.currentTurn % group.members.length;
-      return [group.members[index]];
-  }
-
+  // Remove the previous temporary helper
   async updateMembersOrder(groupId: string, members: GroupMember[]) {
     const group = this.data.groups.find(g => g.id === groupId);
     if (group) {

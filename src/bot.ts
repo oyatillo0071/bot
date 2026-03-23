@@ -23,61 +23,11 @@ interface PendingExpense {
 
 const pendingExpenses = new Map<string, PendingExpense>();
 const pendingPayments = new Map<string, { debtId: string; amount?: number }>();
-
-const TASKS = [
-    { id: 'axlat', label: "🗑 Axlat to'kish", frequency: 1 },
-    { id: 'supurish', label: "🧹 Supurish", frequency: 2 },
-    { id: 'vanna', label: "🧼 Vanna tozalash", frequency: 7 }
-];
-
-// Helper to get active tasks for a specific date
-function getActiveTasks(date: Date) {
-    // Normalize to Tashkent time (UTC+5)
-    const tashkentOffset = 5 * 60;
-    const localTime = new Date(date.getTime() + (date.getTimezoneOffset() + tashkentOffset) * 60000);
-    const daysSinceEpoch = Math.floor(localTime.getTime() / (1000 * 60 * 60 * 24));
-    const dayOfWeek = localTime.getDay(); // 0 is Sunday
-
-    const active = [];
-    // Axlat: Daily
-    active.push(TASKS[0]);
-    
-    // Supurish: Every 2 days
-    if (daysSinceEpoch % 2 === 0) {
-        active.push(TASKS[1]);
-    }
-
-    // Vanna: Weekly (Sunday)
-    if (dayOfWeek === 0) {
-        active.push(TASKS[2]);
-    }
-    
-    return active;
-}
-
-// Helper to get task assignments for a group
-function getTaskAssignments(groupId: string, date: Date = new Date()) {
-    const group = db.getGroups().find(g => g.id === groupId);
-    if (!group || group.members.length === 0) return [];
-    
-    const activeTasks = getActiveTasks(date);
-    const N = group.members.length;
-    
-    return activeTasks.map((task) => {
-        // Find original index in TASKS to keep rotation consistent
-        const taskOriginalIndex = TASKS.findIndex(t => t.id === task.id);
-        const index = (group.currentTurn + taskOriginalIndex) % N;
-        const member = group.members[index];
-        const user = db.getUsers().find(u => u.id === member.userId);
-        return { task, user, userId: member.userId };
-    });
-}
+const pendingPhotos = new Map<string, string>(); // userId -> fileId
 
 // Helper function to get current user's turn
 async function getCurrentTurnUser(groupId: string) {
-  // This function is now less relevant but kept for backward compatibility if needed
-  // or can be repurposed to return the first task person.
-  const assignments = getTaskAssignments(groupId);
+  const assignments = db.getTaskAssignments(groupId);
   return assignments.length > 0 ? assignments[0] : null;
 }
 
@@ -118,6 +68,7 @@ bot.command("start", async (ctx) => {
     "👋 Xush kelibsiz! Men kvartira boshqaruvchisi botman.\n\n" +
       "🧹 **NAVBATCHILIK:**\n" +
       "/join - Ro'yxatga qo'shilish\n" +
+      "/leave - Ro'yxatdan chiqish (kvartiradan ko'chganda)\n" +
       "/list - Navbatchilar va jarimalar\n" +
       "/navbat - Tartibni o'zgartirish (reorder)\n" +
       "/done - Ishni tugatib rasm bilan yuboring\n" +
@@ -130,8 +81,44 @@ bot.command("start", async (ctx) => {
       "🤫 **ANONIM XABAR:**\n" +
       "Bot bilan shaxsiy yozishmada `/anon Xabar` deb yozing.\n" +
       "Xabar guruhga ismingiz ko'rsatilmagan holda yuboriladi.\n\n" +
+      "❌ **/cancel** — Barcha jarayonlarni bekor qilish.\n\n" +
       "Yordam kerak bo'lsa, guruhda yozing!",
   );
+});
+
+// /leave command
+bot.command("leave", async (ctx) => {
+    const userId = ctx.from!.id.toString();
+    const groupId = ctx.chat.id.toString();
+    const firstName = ctx.from?.first_name || "Foydalanuvchi";
+
+    // Check for pending debts
+    const myDebts = db.getDebts().filter(d => d.groupId === groupId && d.debtorId === userId && d.status === 'pending');
+    const myCredits = db.getDebts().filter(d => d.groupId === groupId && d.payerId === userId && d.status === 'pending');
+
+    if (myDebts.length > 0 || myCredits.length > 0) {
+        let warning = `⚠️ **${firstName}**, sizda hali yopilmagan hisob-kitoblar bor:\n`;
+        if (myDebts.length > 0) warning += `- Sizdan qarzdorliklar mavjud.\n`;
+        if (myCredits.length > 0) warning += `- Boshqalar sizdan qarzdor.\n`;
+        warning += `\nIltimos, chiqib ketishdan oldin barcha qarzlarni yopib yuboring (/qarzlar).`;
+        return await ctx.reply(warning, { parse_mode: "Markdown" });
+    }
+
+    const removed = await db.removeMember(groupId, userId);
+    if (removed) {
+        await ctx.reply(`👋 **${firstName}** navbatchilik ro'yxatidan muvaffaqiyatli chiqarildi.`);
+    } else {
+        await ctx.reply("Siz allaqachon ro'yxatda yo'qsiz yoki guruh topilmadi.");
+    }
+});
+
+// /cancel command
+bot.command("cancel", async (ctx) => {
+    const userId = ctx.from!.id.toString();
+    pendingExpenses.delete(userId);
+    pendingPayments.delete(userId);
+    pendingPhotos.delete(userId);
+    await ctx.reply("Barcha ochiq sessiyalar va jarayonlar bekor qilindi. 🆗");
 });
 
 // /navbat command (reorder)
@@ -172,15 +159,20 @@ bot.command("join", async (ctx) => {
 // /list command
 bot.command("list", async (ctx) => {
   const groupId = ctx.chat.id.toString();
-  const assignments = getTaskAssignments(groupId);
+  const assignments = db.getTaskAssignments(groupId);
   if (assignments.length === 0) return await ctx.reply("Ro'yxat bo'sh. /join qiling.");
 
   let text = "📋 **Bugungi vazifalar:**\n\n";
-  assignments.forEach(a => {
+  assignments.forEach((a: any) => {
       const group = db.getGroups().find(g => g.id === groupId);
       const member = group?.members.find(m => m.userId === a.userId);
-      const penalty = member?.penaltyDays || 0;
-      text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**${penalty > 0 ? ` (⚠️ ${penalty} kun jarima)` : ""}\n`;
+      const taskDebt = member?.taskDebts?.[a.task.id] || 0;
+      
+      text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**`;
+      if (a.isDebt) text += " (Eski qarzdan ⏳)";
+      if (taskDebt > 0 && !a.isDebt) text += ` (Jami qarz: ${taskDebt + 1})`;
+      else if (taskDebt > 0 && a.isDebt) text += ` (Qolgan qarz: ${taskDebt})`;
+      text += "\n";
   });
 
   await ctx.reply(text, { parse_mode: "Markdown" });
@@ -460,18 +452,33 @@ bot.on("callback_query:data", async (ctx) => {
   } else if (data.startsWith("task_done_")) {
     const parts = data.split("_");
     const taskId = parts[2];
-    const photoId = parts.slice(3).join("_");
+    const photoId = pendingPhotos.get(userId);
     const groupId = ctx.chat?.id.toString();
+    
     if (!groupId) return;
+    if (!photoId) {
+        return await ctx.editMessageText("❌ Xatolik: Rasm topilmadi. Qaytadan yuboring.");
+    }
 
-    const task = TASKS.find(t => t.id === taskId);
+    // STRICT VALIDATION: Check if this task is actually assigned to this user today
+    const assignments = db.getTaskAssignments(groupId);
+    const myAssignment = assignments.find(a => a.userId === userId && a.task.id === taskId);
+
+    if (!myAssignment) {
+        pendingPhotos.delete(userId);
+        return await ctx.editMessageText("❌ Xatolik: Ushbu vazifa bugun sizga biriktirilmagan!");
+    }
+
+    const taskLabel = myAssignment.task.label;
     const chore = await db.createChore(groupId, userId, photoId, taskId);
     
+    pendingPhotos.delete(userId);
+
     const kb = new InlineKeyboard()
         .text("Tasdiqlash ✅", `confirm_${chore.id}`)
         .text("Rad etish ❌", `reject_${chore.id}`);
 
-    await ctx.editMessageText(`👤 **${ctx.from.first_name}** vazifani bajardi: **${task?.label}**\n\nGuruh a'zolari tasdiqlashi kutilmoqda.`, { reply_markup: kb });
+    await ctx.editMessageText(`👤 **${ctx.from.first_name}** vazifani bajardi: **${taskLabel}**\n\nGuruh a'zolari tasdiqlashi kutilmoqda.`, { reply_markup: kb });
 
   } else if (data.startsWith("confirm_") || data.startsWith("reject_")) {
     const choreId = parseInt(data.split("_")[1] || "0");
@@ -481,8 +488,16 @@ bot.on("callback_query:data", async (ctx) => {
       await db.updateChoreStatus(choreId, action);
       
       if (action === "confirmed") {
-        const task = TASKS.find(t => t.id === chore.taskType);
-        await ctx.editMessageText(`✅ Tasdiqlandi. **${task?.label}** bajarildi.`);
+        const wasDebt = await db.clearMemberTaskDebt(chore.groupId, chore.userId, chore.taskType);
+        const activeTasks = db.getActiveTasks(new Date());
+        const task = activeTasks.find(t => t.id === chore.taskType);
+        const label = task?.label || chore.taskType;
+        
+        if (wasDebt) {
+            await ctx.editMessageText(`✅ Tasdiqlandi. **${label}** qarzi yopildi!`);
+        } else {
+            await ctx.editMessageText(`✅ Tasdiqlandi. Bugungi **${label}** bajarildi.`);
+        }
       } else {
           await ctx.editMessageText("❌ Rad etildi.");
       }
@@ -570,13 +585,16 @@ async function getGeneralStatus(groupId: string) {
   let text = "🏢 **KVARTIRA UMUMIY HOLATI** 📊\n\n";
 
   // 1. Current Assignments
-  const assignments = getTaskAssignments(groupId);
+  const assignments = db.getTaskAssignments(groupId);
   if (assignments.length > 0) {
     text += "📋 **Bugungi vazifalar:**\n";
-    assignments.forEach(a => {
+    assignments.forEach((a: any) => {
         const member = group.members.find(m => m.userId === a.userId);
-        const penalty = member?.penaltyDays || 0;
-        text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**${penalty > 0 ? ` (⚠️ ${penalty} kun jarima)` : ""}\n`;
+        const taskDebt = member?.taskDebts?.[a.task.id] || 0;
+        text += `${a.task.label}: **${a.user?.firstName || "Noma'lum"}**`;
+        if (a.isDebt) text += ` (Qarzdan: ${taskDebt})`;
+        else if (taskDebt > 0) text += ` (Jami: ${taskDebt + 1})`;
+        text += "\n";
     });
   } else {
     text += `📋 **Vazifalar:** Ro'yxat bo'sh.\n`;
@@ -672,21 +690,22 @@ bot.on("message:photo", async (ctx) => {
   
   const userId = ctx.from!.id.toString();
   const groupId = ctx.chat.id.toString();
-  const assignments = getTaskAssignments(groupId);
+  const assignments = db.getTaskAssignments(groupId);
   
-  const userTask = assignments.find(a => a.userId === userId);
+  const userTask = assignments.find((a: any) => a.userId === userId);
   if (!userTask) {
       return await ctx.reply("Bugun sizga vazifa berilmagan. 🤷‍♂️");
   }
 
+  const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+  pendingPhotos.set(userId, fileId);
+
   const kb = new InlineKeyboard();
-  const activeTasksForToday = getActiveTasks(new Date());
-  
   // Show only tasks assigned to THIS user today
-  const myAssignments = assignments.filter(a => a.userId === userId);
+  const myAssignments = assignments.filter((a: any) => a.userId === userId);
   
-  myAssignments.forEach(a => {
-      kb.text(a.task.label, `task_done_${a.task.id}_${ctx.message.photo[ctx.message.photo.length - 1].file_id}`).row();
+  myAssignments.forEach((a: any) => {
+      kb.text(a.task.label, `task_done_${a.task.id}`).row();
   });
 
   await ctx.reply("Qaysi vazifani bajardingiz? Tanlang:", { reply_markup: kb });
@@ -718,10 +737,9 @@ cron.schedule("0 0 * * *", async () => {
     const yesterdayStr = yesterday.toISOString().split('T')[0];
     
     // Check which tasks were active yesterday
-    const activeYesterday = getActiveTasks(yesterday);
-    const assignmentsYesterday = getTaskAssignments(group.id, yesterday);
+    const assignmentsYesterday = db.getTaskAssignments(group.id, yesterday);
 
-    for (const assignment of assignmentsYesterday) {
+    for (const assignment of assignmentsYesterday as any[]) {
         const done = db.getChores().some(c => 
             c.groupId === group.id && 
             c.userId === assignment.userId &&
@@ -731,13 +749,13 @@ cron.schedule("0 0 * * *", async () => {
         );
 
         if (!done) {
-            // Individual penalty
-            await db.addMemberPenalty(group.id, assignment.userId);
+            // Task specific debt penalty
+            await db.addMemberTaskPenalty(group.id, assignment.userId, assignment.task.id);
             const user = db.getUsers().find(u => u.id === assignment.userId);
             try {
                 await bot.api.sendMessage(
                     Number(group.id),
-                    `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. +1 kun jarima.`
+                    `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. Ushbu vazifa bo'yicha qarz +1 ga ko'paydi.`
                 );
             } catch {}
         }
@@ -753,10 +771,10 @@ const times = ["0 9 * * *", "0 12 * * *", "0 20 * * *", "40 22 * * *"];
 times.forEach(t => cron.schedule(t, async () => {
   const groups = db.getGroups();
   for (const group of groups) {
-    const assignments = getTaskAssignments(group.id);
+    const assignments = db.getTaskAssignments(group.id);
     if (assignments.length > 0) {
         let text = "🔔 **BUGUNGI VAZIFALAR:**\n\n";
-        assignments.forEach(a => {
+        assignments.forEach((a: any) => {
             text += `${a.task.label}: [${a.user?.firstName || "Noma'lum"}](tg://user?id=${a.userId})\n`;
         });
         text += "\nIshni tugatib rasm + /done yuboring.";

@@ -9,6 +9,7 @@ async function main() {
         await bot.api.setMyCommands([
             { command: "start", description: "Botni ishga tushirish va yordam" },
             { command: "join", description: "Navbatchilik ro'yxatiga qo'shilish" },
+            { command: "leave", description: "Ro'yxatdan chiqish (ko'chib ketganda)" },
             { command: "list", description: "Bugungi vazifalar ro'yxati" },
             { command: "navbat", description: "Navbatchilik tartibini o'zgartirish" },
             { command: "stats", description: "Umumiy holat va statistika" },
@@ -16,6 +17,7 @@ async function main() {
             { command: "kommunal", description: "Kommunal to'lovni hammaga bo'lish" },
             { command: "qarzlar", description: "Kim kimdan qarzdorligini ko'rish" },
             { command: "toladim", description: "Qarzni to'laganlikni bildirish" },
+            { command: "cancel", description: "Jarayonni bekor qilish" },
         ]);
         console.log("Bot buyruqlari Telegramda ro'yxatga olindi.");
     }
