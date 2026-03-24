@@ -299,15 +299,68 @@ bot.on("message:text", async (ctx, next) => {
     await next();
 });
 
+// /setturn command
+bot.command("setturn", async (ctx) => {
+    const groupId = ctx.chat.id.toString();
+    const group = db.getGroups().find(g => g.id === groupId);
+    if (!group || group.members.length === 0) return await ctx.reply("Guruh topilmadi yoki a'zolar yo'q.");
+
+    const kb = new InlineKeyboard()
+        .text("🗑 Axlat", "st_task_axlat").row()
+        .text("🧹 Supurish", "st_task_supurish").row()
+        .text("🧼 Vanna", "st_task_vanna").row();
+
+    await ctx.reply("Qaysi vazifa navbatini o'zgartirmoqchisiz?", { reply_markup: kb });
+});
+
 // Callback queries
 bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
   const userId = ctx.from.id.toString();
 
   if (data === "ignore") return await ctx.answerCallbackQuery();
-  
-  if (data === "navbat_done") {
-      await ctx.editMessageText("✅ Navbatchilik tartibi saqlandi.");
+
+  if (data.startsWith("st_task_")) {
+      const taskId = data.replace("st_task_", "");
+      const groupId = ctx.chat?.id.toString();
+      if (!groupId) return;
+      const group = db.getGroups().find(g => g.id === groupId);
+      if (!group) return;
+
+      const kb = new InlineKeyboard();
+      group.members.forEach((m) => {
+          const user = db.getUsers().find(u => u.id === m.userId);
+          kb.text(user?.firstName || "Noma'lum", `st_set_${taskId}_${m.userId}`).row();
+      });
+
+      await ctx.editMessageText(`**${taskId}** uchun kimni navbatchi etib belgilaymiz?`, { reply_markup: kb, parse_mode: "Markdown" });
+      return await ctx.answerCallbackQuery();
+  }
+
+  if (data.startsWith("st_set_")) {
+      const parts = data.split("_");
+      const taskId = parts[2];
+      const targetUserId = parts[3];
+      const groupId = ctx.chat?.id.toString();
+      if (!groupId) return;
+
+      const group = db.getGroups().find(g => g.id === groupId);
+      if (!group) return;
+
+      const memberIndex = group.members.findIndex(m => m.userId === targetUserId);
+      if (memberIndex === -1) return;
+
+      // Update the turn for this specific task
+      if (!group.taskTurns) group.taskTurns = {};
+      group.taskTurns[taskId] = memberIndex;
+      await db.save();
+
+      const user = db.getUsers().find(u => u.id === targetUserId);
+      await ctx.editMessageText(`✅ **${taskId}** navbati **${user?.firstName}**ga o'tkazildi.`);
+      return await ctx.answerCallbackQuery();
+  }
+
+  if (data === "navbat_done") {      await ctx.editMessageText("✅ Navbatchilik tartibi saqlandi.");
       return await ctx.answerCallbackQuery();
   }
 
@@ -750,13 +803,14 @@ cron.schedule("0 0 * * *", async () => {
 
         if (!done) {
             // Task specific debt penalty
-            await db.addMemberTaskPenalty(group.id, assignment.userId, assignment.task.id);
+            const newDebt = await db.addMemberTaskPenalty(group.id, assignment.userId, assignment.task.id);
             const user = db.getUsers().find(u => u.id === assignment.userId);
             try {
-                await bot.api.sendMessage(
-                    Number(group.id),
-                    `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. Ushbu vazifa bo'yicha qarz +1 ga ko'paydi.`
-                );
+                const text = newDebt === 2 
+                    ? `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. Endi bu vazifani ketma-ket **2 kun** bajarishi kerak.`
+                    : `⚠️ **JARIMA!**\n${user?.firstName} kecha qarz vazifasini (**${assignment.task.label}**) ham bajarmadi! Jami qarz **${newDebt} kun**ga yetdi.`;
+
+                await bot.api.sendMessage(Number(group.id), text);
             } catch {}
         }
     }

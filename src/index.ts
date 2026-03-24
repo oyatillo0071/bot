@@ -14,6 +14,7 @@ async function main() {
       { command: "leave", description: "Ro'yxatdan chiqish (ko'chib ketganda)" },
       { command: "list", description: "Bugungi vazifalar ro'yxati" },
       { command: "navbat", description: "Navbatchilik tartibini o'zgartirish" },
+      { command: "setturn", description: "Vazifa navbatini qo'lda o'zgartirish" },
       { command: "stats", description: "Umumiy holat va statistika" },
       { command: "xarajat", description: "Xarajat qo'shish (miqdor sabab)" },
       { command: "kommunal", description: "Kommunal to'lovni hammaga bo'lish" },

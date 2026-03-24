@@ -668,10 +668,13 @@ cron.schedule("0 0 * * *", async () => {
                 c.createdAt.startsWith(yesterdayStr));
             if (!done) {
                 // Task specific debt penalty
-                await db.addMemberTaskPenalty(group.id, assignment.userId, assignment.task.id);
+                const newDebt = await db.addMemberTaskPenalty(group.id, assignment.userId, assignment.task.id);
                 const user = db.getUsers().find(u => u.id === assignment.userId);
                 try {
-                    await bot.api.sendMessage(Number(group.id), `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. Ushbu vazifa bo'yicha qarz +1 ga ko'paydi.`);
+                    const text = newDebt === 2
+                        ? `⚠️ **JARIMA!**\n${user?.firstName} kecha o'z vazifasini (**${assignment.task.label}**) bajarmadi. Endi bu vazifani ketma-ket **2 kun** bajarishi kerak.`
+                        : `⚠️ **JARIMA!**\n${user?.firstName} kecha qarz vazifasini (**${assignment.task.label}**) ham bajarmadi! Jami qarz **${newDebt} kun**ga yetdi.`;
+                    await bot.api.sendMessage(Number(group.id), text);
                 }
                 catch { }
             }

@@ -18,7 +18,7 @@ export interface GroupMember {
 
 export interface Group {
   id: string;
-  currentTurn: number;
+  taskTurns: Record<string, number>; // { 'axlat': 5, 'supurish': 2, ... }
   reminderHour: number;
   members: GroupMember[];
   penaltyDays: number;
@@ -121,16 +121,19 @@ class JsonDB {
     const group = this.data.groups.find(g => g.id === groupId);
     if (!group || group.members.length === 0) return [];
     
+    if (!group.taskTurns) group.taskTurns = { 'axlat': 0, 'supurish': 0, 'vanna': 0 };
+
     const activeTasks = this.getActiveTasks(date);
     const N = group.members.length;
     
-    // 1. Normal rotation for today
-    const assignments = activeTasks.map((task) => {
-        const taskOriginalIndex = TASKS_CONFIG.findIndex(t => t.id === task.id);
-        const index = (group.currentTurn + taskOriginalIndex) % N;
+    // 1. Independent rotation for each task
+    const assignments: any[] = [];
+    activeTasks.forEach((task) => {
+        const turn = group.taskTurns[task.id] ?? 0;
+        const index = turn % N;
         const member = group.members[index];
         const user = this.data.users.find(u => u.id === member.userId);
-        return { task, user, userId: member.userId, isDebt: false };
+        assignments.push({ task, user, userId: member.userId, isDebt: false });
     });
 
     // 2. Add anyone who has outstanding debts for ANY task (not just active today)
@@ -164,7 +167,13 @@ class JsonDB {
 
   async upsertGroup(groupId: string) {
     if (!this.data.groups.find(g => g.id === groupId)) {
-      this.data.groups.push({ id: groupId, currentTurn: 0, reminderHour: 9, members: [], penaltyDays: 0 });
+      this.data.groups.push({ 
+        id: groupId, 
+        taskTurns: { 'axlat': 0, 'supurish': 0, 'vanna': 0 }, 
+        reminderHour: 9, 
+        members: [], 
+        penaltyDays: 0 
+      });
       await this.save();
     }
   }
@@ -249,10 +258,19 @@ class JsonDB {
       const member = group.members.find(m => m.userId === userId);
       if (member) {
           if (!member.taskDebts) member.taskDebts = { 'axlat': 0, 'supurish': 0, 'vanna': 0 };
-          member.taskDebts[taskId] = (member.taskDebts[taskId] || 0) + 1;
+          
+          const currentDebt = member.taskDebts[taskId] || 0;
+          if (currentDebt === 0) {
+              member.taskDebts[taskId] = 2; // Missed today + 1 penalty
+          } else {
+              member.taskDebts[taskId] += 1; // Already had debt, add 1 more day
+          }
+          
           await this.save();
+          return member.taskDebts[taskId];
       }
     }
+    return 0;
   }
 
   async clearMemberTaskDebt(groupId: string, userId: string, taskId: string) {
@@ -270,16 +288,22 @@ class JsonDB {
 
   async decrementPenaltyOrMoveTurn(groupId: string) {
     const group = this.data.groups.find(g => g.id === groupId);
-    if (group) {
-      // Find the member who is at the current rotation (usually for daily 'axlat' task)
-      const index = group.currentTurn % group.members.length;
-      const member = group.members[index];
+    if (group && group.members.length > 0) {
+      if (!group.taskTurns) group.taskTurns = { 'axlat': 0, 'supurish': 0, 'vanna': 0 };
 
-      // Note: We only move turn if the member responsible for the rotation task is 'clean'
-      // This is optional but ensures rotation logic stays paused if needed.
-      // However, the user wants the debt to accumulate.
-      // Let's just always move turn at midnight, and debts stay with people.
-      group.currentTurn += 1;
+      for (const taskId of Object.keys(group.taskTurns)) {
+          const turn = group.taskTurns[taskId];
+          const index = turn % group.members.length;
+          const member = group.members[index];
+
+          // Check if the person responsible for THIS task has a debt for THIS task
+          const hasDebtForThisTask = (member.taskDebts?.[taskId] || 0) > 0;
+
+          // If no debt for this specific task, move the turn for this task forward
+          if (!hasDebtForThisTask) {
+              group.taskTurns[taskId] += 1;
+          }
+      }
       await this.save();
     }
   }
